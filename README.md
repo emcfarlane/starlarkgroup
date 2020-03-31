@@ -4,6 +4,8 @@
 
 Go errgroup.Group for starlark. Allows a starlark thread to spawn go routines.
 Each go routine can be optionally pooled and rate limited.
+Arguments to go are frozen. Wait returns a tuple of sorted values in order of 
+calling.
 
 ```python
 def square(x):

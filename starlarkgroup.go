@@ -65,6 +65,8 @@ func (r byPos) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r byPos) Less(i, j int) bool { return r[i].i < r[j].i }
 
 // Group implements errgroup.Group in starlark with additional rate limiting.
+// Arguments to go call are frozen. Wait returns a sorted tuple in order of
+// calling.
 type Group struct {
 	ctx     context.Context
 	group   *errgroup.Group
@@ -211,7 +213,5 @@ func group_wait(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	for i, result := range g.results {
 		elems[i] = result.v
 	}
-
-	list := starlark.NewList(elems)
-	return list, nil
+	return starlark.Tuple(elems), nil
 }
