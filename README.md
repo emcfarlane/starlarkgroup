@@ -1,6 +1,6 @@
 # starlarkgroup
 
-[![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)](https://pkg.go.dev/mod/github.com/afking/starlarkgroup)
+[![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)](https://pkg.go.dev/mod/github.com/emcfarlane/starlarkgroup)
 
 Go errgroup.Group for starlark. Allows a starlark thread to spawn go routines.
 Each go routine can be optionally pooled and rate limited.

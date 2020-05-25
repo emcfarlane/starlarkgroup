@@ -1,4 +1,4 @@
-module github.com/afking/starlarkgroup
+module github.com/emcfarlane/starlarkgroup
 
 go 1.14
 
