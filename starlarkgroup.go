@@ -60,7 +60,7 @@ type callable struct {
 
 // Group implements errgroup.Group in starlark with additional rate limiting.
 // Arguments to go call are frozen. Wait returns a sorted tuple in order of
-// calling.
+// calling. Calls are lazy evaluated and only executed when waiting.
 type Group struct {
 	ctx     context.Context
 	group   *errgroup.Group
