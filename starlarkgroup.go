@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -53,20 +52,15 @@ func Make(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwa
 	return NewGroup(ctx, n, r, burst), nil
 }
 
-type result struct {
-	i int
-	v starlark.Value
+type callable struct {
+	fn     starlark.Callable
+	args   starlark.Tuple
+	kwargs []starlark.Tuple
 }
-
-type byPos []result
-
-func (r byPos) Len() int           { return len(r) }
-func (r byPos) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
-func (r byPos) Less(i, j int) bool { return r[i].i < r[j].i }
 
 // Group implements errgroup.Group in starlark with additional rate limiting.
 // Arguments to go call are frozen. Wait returns a sorted tuple in order of
-// calling.
+// calling. Calls are lazy evaluated and only executed when waiting.
 type Group struct {
 	ctx     context.Context
 	group   *errgroup.Group
@@ -74,10 +68,8 @@ type Group struct {
 
 	frozen bool
 
-	n, i    int
-	queue   chan func() error
-	mu      sync.Mutex
-	results []result
+	n     int
+	calls []callable
 }
 
 func (g *Group) String() string       { return "group()" }
@@ -136,82 +128,92 @@ func group_go(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple,
 	}
 
 	args.Freeze()
-	for _, kwarg := range kwargs {
+	kwargs = make([]starlark.Tuple, len(kwargs))
+	for i, kwarg := range kwargs {
 		kwarg.Freeze()
+		kwargs[i] = kwarg
 	}
 
 	if g.ctx.Err() != nil {
 		return starlark.None, nil // Context cancelled
 	}
 
-	args = args[1:]
-	i := g.i
-	g.i++
-
-	g.limiter.Wait(g.ctx)
-
-	call := func() error {
-		thread := new(starlark.Thread)
-		thread.SetLocal("context", g.ctx)
-
-		v, err := starlark.Call(thread, fn, args, kwargs)
-		if err != nil {
-			return err
-		}
-
-		g.mu.Lock()
-		g.results = append(g.results, result{i: i, v: v})
-		g.mu.Unlock()
-		return nil
-	}
-
-	if g.n <= 0 {
-		g.group.Go(call)
-		return starlark.None, nil
-	}
-
-	if i == 0 {
-		g.queue = make(chan func() error, g.n)
-	}
-
-	if i < g.n {
-		g.group.Go(func() error {
-			for call := range g.queue {
-				if err := call(); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	}
-
-	select {
-	case g.queue <- call:
-	case <-g.ctx.Done():
-	}
+	g.calls = append(g.calls, callable{
+		fn:     fn,
+		args:   args[1:],
+		kwargs: kwargs,
+	})
 	return starlark.None, nil
 }
 
 func group_wait(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	g := b.Receiver().(*Group)
-
 	if g.frozen {
 		return nil, fmt.Errorf("group.wait: frozen")
 	}
 	g.Freeze()
 
-	if g.queue != nil {
-		close(g.queue)
+	var queue chan func() error
+	elems := make([]starlark.Value, len(g.calls))
+	for i, v := range g.calls {
+		var (
+			i      = i
+			fn     = v.fn
+			args   = v.args
+			kwargs = v.kwargs
+		)
+
+		if err := g.limiter.Wait(g.ctx); err != nil {
+			return nil, err
+		}
+
+		call := func() error {
+			thread := new(starlark.Thread)
+			thread.SetLocal("context", g.ctx)
+
+			v, err := starlark.Call(thread, fn, args, kwargs)
+			if err != nil {
+				return err
+			}
+
+			elems[i] = v
+			return nil
+		}
+
+		if g.n <= 0 {
+			g.group.Go(call)
+			continue
+		}
+
+		if i == 0 {
+			queue = make(chan func() error, g.n)
+		}
+
+		if i < g.n {
+			g.group.Go(func() error {
+				for call := range queue {
+					if err := call(); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		}
+
+		select {
+		case queue <- call:
+		case <-g.ctx.Done():
+			return nil, g.ctx.Err()
+		}
+	}
+
+	if queue != nil {
+		close(queue)
 	}
 
 	if err := g.group.Wait(); err != nil {
 		return nil, err
 	}
 
-	sort.Sort(byPos(g.results))
-	elems := make([]starlark.Value, len(g.results))
-	for i, result := range g.results {
-		elems[i] = result.v
-	}
 	return starlark.Tuple(elems), nil
 }

@@ -10,20 +10,20 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/emcfarlane/starlarkassert"
 	"go.starlark.net/starlark"
-	"go.starlark.net/starlarktest"
 )
 
 func load(thread *starlark.Thread, module string) (starlark.StringDict, error) {
 	if module == "assert.star" {
-		return starlarktest.LoadAssertModule()
+		return starlarkassert.LoadAssertModule()
 	}
 	return nil, fmt.Errorf("unknown module %s", module)
 }
 
 func TestExecFile(t *testing.T) {
 	thread := &starlark.Thread{Load: load}
-	starlarktest.SetReporter(thread, t)
+	starlarkassert.SetReporter(thread, t)
 	globals := starlark.StringDict{
 		"group": starlark.NewBuiltin("group", Make),
 	}
