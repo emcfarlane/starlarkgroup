@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	starlarktime "go.starlark.net/lib/time"
 	"go.starlark.net/starlark"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
@@ -27,9 +28,11 @@ import (
 // 	}
 //
 func Make(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var n int
-	var every string
-	var burst int
+	var (
+		n     int
+		every starlarktime.Duration
+		burst int
+	)
 	if err := starlark.UnpackArgs(
 		"group", args, kwargs,
 		"n?", &n, "every?", &every, "burst?", &burst,
@@ -38,11 +41,8 @@ func Make(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwa
 	}
 
 	r := rate.Inf
-	if every != "" {
-		d, err := time.ParseDuration(every)
-		if err != nil {
-			return nil, err
-		}
+	if every.Truth() {
+		d := time.Duration(every)
 		r = rate.Every(d)
 	}
 
