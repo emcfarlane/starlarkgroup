@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"sync"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -102,6 +104,8 @@ func (g *Group) AttrNames() []string {
 	return names
 }
 
+// NewGroup creates a new Group with context, number of routines, rate limit and
+// burst limit.
 func NewGroup(ctx context.Context, n int, r rate.Limit, b int) *Group {
 	group, ctx := errgroup.WithContext(ctx)
 	limiter := rate.NewLimiter(r, b)
@@ -110,10 +114,11 @@ func NewGroup(ctx context.Context, n int, r rate.Limit, b int) *Group {
 		ctx:     ctx,
 		group:   group,
 		limiter: limiter,
+		n:       n,
 	}
 }
 
-func group_go(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func group_go(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("group.go: missing function arg")
 	}
@@ -125,13 +130,6 @@ func group_go(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple,
 	g := b.Receiver().(*Group)
 	if g.frozen {
 		return nil, fmt.Errorf("group: frozen")
-	}
-
-	args.Freeze()
-	kwargs = make([]starlark.Tuple, len(kwargs))
-	for i, kwarg := range kwargs {
-		kwarg.Freeze()
-		kwargs[i] = kwarg
 	}
 
 	if g.ctx.Err() != nil {
@@ -153,6 +151,30 @@ func group_wait(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	}
 	g.Freeze()
 
+	if err := starlark.UnpackArgs("group.wait", args, kwargs); err != nil {
+		return nil, err
+	}
+
+	var (
+		mu      sync.Mutex
+		printer func(goThread *starlark.Thread, msg string)
+		loader  func(goThread *starlark.Thread, module string) (starlark.StringDict, error)
+	)
+	if thread.Print != nil {
+		printer = func(goThread *starlark.Thread, msg string) {
+			mu.Lock()
+			defer mu.Unlock()
+			thread.Print(goThread, msg)
+		}
+	}
+	if thread.Load != nil {
+		loader = func(goThread *starlark.Thread, module string) (starlark.StringDict, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return thread.Load(goThread, module)
+		}
+	}
+
 	var queue chan func() error
 	elems := make([]starlark.Value, len(g.calls))
 	for i, v := range g.calls {
@@ -162,13 +184,23 @@ func group_wait(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 			args   = v.args
 			kwargs = v.kwargs
 		)
+		args.Freeze()
+		kwargs = make([]starlark.Tuple, len(kwargs))
+		for i, kwarg := range kwargs {
+			kwarg.Freeze()
+			kwargs[i] = kwarg
+		}
 
 		if err := g.limiter.Wait(g.ctx); err != nil {
 			return nil, err
 		}
 
 		call := func() error {
-			thread := new(starlark.Thread)
+			thread := &starlark.Thread{
+				Name:  thread.Name + "/" + strconv.Itoa(i),
+				Print: printer,
+				Load:  loader,
+			}
 			thread.SetLocal("context", g.ctx)
 
 			v, err := starlark.Call(thread, fn, args, kwargs)

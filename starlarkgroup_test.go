@@ -5,63 +5,19 @@
 package starlarkgroup
 
 import (
-	"fmt"
-	"io/ioutil"
-	"path/filepath"
 	"testing"
 
 	"github.com/emcfarlane/starlarkassert"
 	"go.starlark.net/starlark"
 )
 
-func load(thread *starlark.Thread, module string) (starlark.StringDict, error) {
-	if module == "assert.star" {
-		return starlarkassert.LoadAssertModule()
-	}
-	return nil, fmt.Errorf("unknown module %s", module)
-}
-
 func TestExecFile(t *testing.T) {
-	thread := &starlark.Thread{Load: load}
-	starlarkassert.SetReporter(thread, t)
+	runner := func(thread *starlark.Thread, test func()) {
+		t.Logf("%s", thread.Name)
+		test()
+	}
 	globals := starlark.StringDict{
 		"group": starlark.NewBuiltin("group", Make),
 	}
-
-	files, err := filepath.Glob("testdata/*.star")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, filename := range files {
-		src, err := ioutil.ReadFile(filename)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		_, err = starlark.ExecFile(thread, filename, src, globals)
-		switch err := err.(type) {
-		case *starlark.EvalError:
-			var found bool
-			for i := range err.CallStack {
-				posn := err.CallStack.At(i).Pos
-				if posn.Filename() == filename {
-					linenum := int(posn.Line)
-					msg := err.Error()
-
-					t.Errorf("\n%s:%d: unexpected error: %v", filename, linenum, msg)
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Error(err.Backtrace())
-			}
-		case nil:
-			// success
-		default:
-			t.Errorf("\n%s", err)
-		}
-
-	}
+	starlarkassert.RunTests(t, "testdata/*.star", globals, runner)
 }
